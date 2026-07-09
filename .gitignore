@@ -1,4 +1,17 @@
-.venv/
-myvenv/
+# 파이썬 캐시 파일
 __pycache__/
 *.pyc
+*.pyo
+*.pyd
+
+# 가상환경 폴더
+.venv/
+venv/
+env/
+myvenv/
+
+# Mac 전용 시스템 파일
+.DS_Store
+
+# 인공지능 모델 파일
+*.tflite
