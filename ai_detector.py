@@ -1,12 +1,9 @@
 import mediapipe as mp
 import face_recognition
-import mediapipe as mp
 import time
-import os
 import cv2
 import math
 import numpy as np
-import face_recognition
 import threading
 
 ## 변수 할당
@@ -18,7 +15,7 @@ VisionRunningMode = mp.tasks.vision.RunningMode
 
 class MuggleBlockerDetector:
     # 초기화
-    def __init__(self, model_path = '/Users/taeyeonkim/Desktop/coding/Python_Workspace/MuggleBlocker/blaze_face_short_range.tflite', user_face_image_path='/Users/taeyeonkim/Desktop/owner.png'):
+    def __init__(self, model_path = '/Users/taeyeonkim/Desktop/coding/Python_Workspace/MuggleBlocker/blaze_face_short_range.tflite'):
         # 비율 계산시 필요한 변수
         self.frame_width = 0
         self.frame_height = 0
@@ -39,14 +36,14 @@ class MuggleBlockerDetector:
 
         # 신원 검문 변수
         self.last_recognition_time = time.time()
-        self.recognition_interval = 5.  # 시간 지정, 60초 기본
+        self.recognition_interval = 5.0  # 시간 지정, 60초 기본
         self.is_stranger_detected = False
         self.is_recognizing = False
 
 
         # 사용자 얼굴 등록
-        user_face_image = face_recognition.load_image_file(user_face_image_path)
-        self.user_encoding = face_recognition.face_encodings(user_face_image)[0]
+        self.user_face_image = None # 웹캠에서 받아오기
+        self.user_encoding = None
 
         # 옵션 설정
         options = FaceDetectorOptions(
@@ -56,6 +53,18 @@ class MuggleBlockerDetector:
             min_detection_confidence=0.5)
     
         self.detector = FaceDetector.create_from_options(options)
+
+    # 사용자 얼굴 등록
+    def register_user_face(self, frame_rgb) -> bool:
+
+        encodings = face_recognition.face_encodings(frame_rgb)
+
+        if len(encodings) > 0:
+            self.user_encodings = encodings[0]
+            return True
+        else:
+            return False
+
 
     # call back
     def _save_result_callback(self, result, output_image: mp.Image, timestamp_ms: int):
@@ -107,6 +116,8 @@ class MuggleBlockerDetector:
     def _verify_identity_thread(self, pure_crop_image):
         self.is_recognizing = True # 검증 시작 (락)
         try:
+
+            self.user_encoding = face_recognition.face_encodings(self.user_face_image)[0]
             encodings = face_recognition.face_encodings(pure_crop_image)
 
             if len(encodings) > 0:
@@ -188,7 +199,7 @@ class MuggleBlockerDetector:
         self.detector.detect_async(input_image, safe_timestamp_ms)
 
         # 검증 트리거
-        if self.roi_box is not None and not self.is_recognizing:
+        if self.user_encoding is not None and self.roi_box is not None and not self.is_recognizing:
             current_time = time.time()
             if current_time - self.last_recognition_time > self.recognition_interval: # 검증 주기가 되면
                 self.last_recognition_time = current_time # 현재 시간을 마지막 인식 시간으로 갱신
@@ -299,7 +310,7 @@ class MuggleBlockerDetector:
 
 
 
-
+# 테스트용
 # 내 모듈 파일(ai_detector.py)을 직접 실행했을 때만 아래 코드가 돌아갑니다.
 # (팀원이 import해서 쓸 때는 이 부분이 무시되어 아주 안전합니다.)
 

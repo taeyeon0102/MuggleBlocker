@@ -4,6 +4,21 @@
 ---
 
 # 🧙‍♂️ MuggleBlockerDetector (AI 모듈) 사용 설명서
+## 0. 초기 설정: 주인(마법사) 얼굴 등록 (필수!)
+메인 감시 루프를 시작하기 전에, 주인의 얼굴을 AI에게 각인시키는 과정이 필요합니다. 파이프라인 시작 부분(초기 세팅 화면)에서 웹캠 프레임을 캡처하여 아래 메서드로 넘겨주세요.
+
+ ```Python
+# 캡처된 프레임을 던져서 주인 얼굴 등록 시도
+is_registered = detector.register_user_face(capture_frame)
+
+if is_registered:
+    print("얼굴 등록 성공! 메인 감시 화면으로 넘어갑니다.")
+    # -> 여기서부터 while 루프 돌면서 process_frame() 호출 시작!
+else:
+    print("얼굴을 찾지 못했습니다. UI에 재시도 알림을 띄워주세요.")
+```
+참고: 반드시 이 메서드를 통해 주인의 얼굴이 성공적으로 등록(True 반환)된 이후에 메인 감시 기능(process_frame)이 정상 작동합니다!
+
 ## 1. 모듈 초기화 (Pipeline 시작 부분)
 UI나 메인 파이프라인이 켜질 때 딱 한 번만 객체를 생성해 주시면 됩니다.
 
