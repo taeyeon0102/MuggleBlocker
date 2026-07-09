@@ -1,6 +1,7 @@
 import mediapipe as mp
 import face_recognition
 import time
+import os
 import cv2
 import math
 import numpy as np
@@ -13,9 +14,13 @@ FaceDetectorOptions = mp.tasks.vision.FaceDetectorOptions
 FaceDetectorResult = mp.tasks.vision.FaceDetectorResult
 VisionRunningMode = mp.tasks.vision.RunningMode
 
+# 모델 경로 설정
+BASE_DIR = os.path.dirname(os.path.abspath(__file__))
+DEFAULT_MODEL_PATH = os.path.join(BASE_DIR, "models", "blaze_face_short_range.tflite")
+
 class MuggleBlockerDetector:
     # 초기화
-    def __init__(self, model_path = '/Users/taeyeonkim/Desktop/coding/Python_Workspace/MuggleBlocker/blaze_face_short_range.tflite'):
+    def __init__(self, model_path = DEFAULT_MODEL_PATH):
         # 비율 계산시 필요한 변수
         self.frame_width = 0
         self.frame_height = 0
