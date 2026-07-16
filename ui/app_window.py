@@ -57,19 +57,13 @@ class AppWindow:
             self.is_running = True
             self.status_label.config(text="보안 감시 중...", fg="green")
             self.btn_toggle.config(text="방어막 끄기 (OFF)")
-            
-            # 비디오 감지 루프 시작
+            # self.streamer.start() # 비디오 캡처 스레드 가동
             self.update_frame()
         else:
             self.is_running = False
             self.status_label.config(text="시스템 정지됨", fg="red")
             self.btn_toggle.config(text="방어막 켜기 (ON)")
-            
-            # 타이머 루프 예약 취소
-            if self.loop_id is not None:
-                self.root.after_cancel(self.loop_id)
-                self.loop_id = None
-                
+            # self.streamer.stop() # 비디오 캡처 스레드 정지
             self.canvas.delete("all")
             self.canvas_image_id = None
             self.user_registered = False # 본인 등록 플래그 리셋
@@ -110,36 +104,12 @@ class AppWindow:
                 self._analyze_frame(frame_rgb)
 
         else:
-            # [상태 2] 정상 감시 상태인 경우: AI 분석 피드백 적용
-            intrusion_active = False
-            if current_status == "NORMAL":
-                self.status_label.config(text="보안 감시 중 (정상 상태)", fg="green")
-            elif current_status == "AWAY":
-                self.status_label.config(text="사용자 자리 비움 (AWAY)", fg="orange")
-                # [수정] 자리를 비웠을 때도 화면을 차단하기 위해 잠금 컨트롤러를 격발합니다.
-                self._trigger_system_lock()
-            elif current_status == "INTRUSION":
-                self.status_label.config(text="🚨 머글 침입 감지! (INTRUSION) 🚨", fg="red")
-                intrusion_active = True
-                
-                # 머글 침입 시 잠금 컨트롤러 가동
-                self._trigger_system_lock()
-
-            # 실시간 프레임 취득 (침입 중일 때 성에 오버레이가 자연스럽게 합성됨)
-            ret, frame_rgb = self.streamer.get_frame(intrusion_mode=intrusion_active)
-            
-            if ret and frame_rgb is not None:
-                # 본인 등록 안 된 경우 최초 1회 자동 등록
-                if not self.user_registered and self.detector is not None:
-                    if self.detector.register_user_face(frame_rgb):
-                        self.user_registered = True
-                        print("[시스템] 사용자 얼굴 등록 완료!")
-
-                # AI 모듈 백그라운드 분석 전달
-                self._analyze_frame(frame_rgb)
-                
-                # RGB 이미지를 Tkinter용 이미지 객체로 메모리 최적화 변환
-                img = Image.fromarray(frame_rgb)
+            # 정상 감시 상태인 경우: 웹캠 프레임 정상 출력
+            self.status_label.config(text="보안 감시 중...", fg="green")
+            ret, frame = self.streamer.get_frame()
+            if ret and frame is not None:
+                # BGR -> RGB 및 ImageTk 변환
+                img = Image.fromarray(frame)
                 self.photo = ImageTk.PhotoImage(image=img)
                 
                 if self.canvas_image_id is None:

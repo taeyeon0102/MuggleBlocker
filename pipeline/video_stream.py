@@ -2,7 +2,7 @@ import cv2
 import os
 
 class VideoStreamer:
-    def __init__(self, src=0):
+    def __init__(self, src=1):
         self.cap = cv2.VideoCapture(src)
         self.is_opened = self.cap.isOpened()
         
