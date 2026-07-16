@@ -12,7 +12,10 @@ class VideoStreamer:
         self.frost_img = None
         
         if os.path.exists(self.overlay_path):
-            self.frost_img = cv2.imread(self.overlay_path)
+            # 오버레이를 읽어온 뒤, OpenCV의 BGR 형식을 사전에 RGB 형식으로 변환해둡니다.
+            bgr_frost = cv2.imread(self.overlay_path)
+            if bgr_frost is not None:
+                self.frost_img = cv2.cvtColor(bgr_frost, cv2.COLOR_BGR2RGB)
         else:
             print(f"[경고] 성에 오버레이 에셋을 찾을 수 없습니다: {self.overlay_path}")
 
@@ -23,16 +26,18 @@ class VideoStreamer:
         if self.is_opened:
             ret, frame = self.cap.read()
             if ret:
-                # 1. 침입 감지 모드(Repello Muggletum) 활성화 시 성에 오버레이 합성
+                # 1. 캔버스와 호환되도록 먼저 원본을 RGB로 변환합니다.
+                frame_rgb = cv2.cvtColor(frame, cv2.COLOR_BGR2RGB)
+                
+                # 2. 침입 감지 모드(Repello Muggletum) 활성화 시 성에 오버레이 합성 (둘 다 RGB 상태이므로 안전함)
                 if intrusion_mode and self.frost_img is not None:
-                    h, w, _ = frame.shape
+                    h, w, _ = frame_rgb.shape
                     resized_frost = cv2.resize(self.frost_img, (w, h))
                     
                     # 기획안 가이드에 따른 cv2.addWeighted 오버레이 합성 (원본 60%, 얼음 효과 40%)
-                    frame = cv2.addWeighted(frame, 0.6, resized_frost, 0.4, 0)
+                    frame_rgb = cv2.addWeighted(frame_rgb, 0.6, resized_frost, 0.4, 0)
                 
-                # 2. Tkinter 표시 및 AI 검출을 위해 BGR을 RGB로 변환하여 리턴
-                return ret, cv2.cvtColor(frame, cv2.COLOR_BGR2RGB)
+                return ret, frame_rgb
                 
         return False, None
 
