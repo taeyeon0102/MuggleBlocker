@@ -43,13 +43,13 @@ class AppWindow:
             self.is_running = True
             self.status_label.config(text="보안 감시 중...", fg="green")
             self.btn_toggle.config(text="방어막 끄기 (OFF)")
-            self.streamer.start() # 비디오 캡처 스레드 가동
+            # self.streamer.start() # 비디오 캡처 스레드 가동
             self.update_frame()
         else:
             self.is_running = False
             self.status_label.config(text="시스템 정지됨", fg="red")
             self.btn_toggle.config(text="방어막 켜기 (ON)")
-            self.streamer.stop() # 비디오 캡처 스레드 정지
+            # self.streamer.stop() # 비디오 캡처 스레드 정지
             self.canvas.delete("all")
             
     def update_frame(self):
@@ -69,8 +69,8 @@ class AppWindow:
         else:
             # 정상 감시 상태인 경우: 웹캠 프레임 정상 출력
             self.status_label.config(text="보안 감시 중...", fg="green")
-            frame = self.streamer.get_frame()
-            if frame is not None:
+            ret, frame = self.streamer.get_frame()
+            if ret and frame is not None:
                 # BGR -> RGB 및 ImageTk 변환
                 img = Image.fromarray(frame)
                 self.photo = ImageTk.PhotoImage(image=img)
