@@ -9,7 +9,9 @@ class AppWindow:
     def __init__(self, root):
         self.root = root
         self.root.title("Muggle Blocker - UI")
-        self.root.geometry("700x550")
+        
+        # [수정] 맥북 전체 화면 덮기 & 모니터 해상도 자동 계산!
+        self.root.geometry("1024x768")
         
         # 1. AI 디텍터, 시스템 컨트롤러 및 비디오 스트리머 초기화
         try:
@@ -28,9 +30,14 @@ class AppWindow:
         self.canvas_image_id = None
         self.photo = None # 이미지 객체가 가비지 컬렉터에 의해 사라지는 것을 방지
 
+        # 캔버스 크기 및 상태 저장
+        self.canvas_w = 960
+        self.canvas_h = 540
+        self.current_state = "NORMAL"
+
         # 에셋 로드 (기획안 명세 기준)
         try:
-            self.fake_bg = Image.open("Assets/fake_desktop_wallpaper.png").resize((640, 360))
+            self.fake_bg = Image.open("Assets/fake_desktop_wallpaper.png").resize((self.canvas_w, self.canvas_h))
             self.fake_photo = ImageTk.PhotoImage(self.fake_bg)
         except Exception:
             self.fake_photo = None
@@ -42,9 +49,8 @@ class AppWindow:
         
         self.status_label = tk.Label(root, text="시스템 정지됨", fg="red", font=("Helvetica", 12))
         self.status_label.pack(pady=5)
-        
-        # 2. 비디오 캔버스 영역 (640x360 규격)
-        self.canvas = tk.Canvas(root, width=640, height=360, bg="black")
+
+        self.canvas = tk.Canvas(root, width=self.canvas_w, height=self.canvas_h, bg="black")
         self.canvas.pack(pady=10)
         
         # 3. 제어 버튼 하단 배치
@@ -72,16 +78,36 @@ class AppWindow:
         """메인 비디오 프레임 갱신 및 AI 분석 피드백 루프"""
         if not self.is_running:
             return
+        
+        # [연결] 카메라에서 프레임 가져오기 (매번 가져와야 AI도 주고 화면도 그림)
+        # AI가 헷갈리지 않게 오버레이 없는 깨끗한 원본(intrusion_mode=False)을 가져오기
+        ret, frame_rgb = self.streamer.get_frame(intrusion_mode=False)
+
+        if not ret or frame_rgb is None:
+            self.loop_id = self.root.after(30, self.update_frame)
+            return
+        
+        # [연결] 프로그램 켜자마자 웹캠 앞의 주인 얼굴을 최초 1회 자동 등록!
+        if self.detector is not None and not self.user_registered:
+            print("[시스템] 첫 화면에서 주인 얼굴을 탐색합니다...")
+            if self.detector.register_user_face(frame_rgb):
+                self.user_registered = True
+                print("[시스템] 🧙‍♂️ 주인 얼굴 등록 완료! 본격 감시 시작!")
+            else:
+                pass # 첫 화면에서 얼굴을 못 찾았으면 0.03초 뒤에 다시 시도
             
         # AI 디텍터 상태 피드백 확인 (None 체크 및 안전장치)
-        current_status = "NORMAL"
-        if self.detector is not None:
-            current_status = self.detector.get_status()
+        if self.detector is not None and self.user_registered:
+            self._analyze_frame(frame_rgb)
+            self.current_status = self.detector.get_status()
 
         # [추가] 사용자가 다시 정상 감지(NORMAL)되면 자동으로 보안 잠금을 해제합니다.
-        if current_status == "NORMAL" and self.controller.is_locked:
+        if self.current_status == "NORMAL" and self.controller.is_locked:
             print("[시스템] 사용자 본인 확인 완료 -> 보안 잠금 해제!")
             self._trigger_system_unlock()
+        elif self.current_status in ["INTRUSION", "AWAY"] and not self.controller.is_locked: # 반대 경우 추가
+                print(f"[시스템] 🚨 {self.current_status} 감지! -> 보안 잠금 실행!")
+                self._trigger_system_lock()
 
         # 1. 컨트롤러 가동 상태(is_locked) 체크
         if self.controller.is_locked:
@@ -98,25 +124,28 @@ class AppWindow:
                 self.canvas_image_id = None
                 self.canvas.create_text(320, 180, text="Mischief Managed", fill="red", font=("Helvetica", 18))
             
-            # 잠금 상태에서도 해제를 계속 감시하기 위해 실시간 연산은 백그라운드 구동
-            ret, frame_rgb = self.streamer.get_frame(intrusion_mode=False)
-            if ret and frame_rgb is not None:
-                self._analyze_frame(frame_rgb)
+            # [중복 제거] 잠금 상태에서도 해제를 계속 감시하기 위해 실시간 연산은 백그라운드 구동
+            # ret, frame_rgb = self.streamer.get_frame(intrusion_mode=False)
+            # if ret and frame_rgb is not None:
+            #     self._analyze_frame(frame_rgb)
 
         else:
             # 정상 감시 상태인 경우: 웹캠 프레임 정상 출력
             self.status_label.config(text="보안 감시 중...", fg="green")
-            ret, frame = self.streamer.get_frame()
-            if ret and frame is not None:
+
+            # [중복 제거] ret, frame = self.streamer.get_frame() 
+
+            #if ret and frame is not None:
                 # BGR -> RGB 및 ImageTk 변환
-                img = Image.fromarray(frame)
-                self.photo = ImageTk.PhotoImage(image=img)
-                
-                if self.canvas_image_id is None:
-                    self.canvas_image_id = self.canvas.create_image(0, 0, anchor=tk.NW, image=self.photo)
-                else:
-                    self.canvas.itemconfig(self.canvas_image_id, image=self.photo)
-                
+            img = Image.fromarray(frame_rgb)
+            img = img.resize((self.canvas_w, self.canvas_h)) # 카메라 크기 줄이기
+            self.photo = ImageTk.PhotoImage(image=img)
+            
+            if self.canvas_image_id is None:
+                self.canvas_image_id = self.canvas.create_image(0, 0, anchor=tk.NW, image=self.photo)
+            else:
+                self.canvas.itemconfig(self.canvas_image_id, image=self.photo)
+            
         # 약 30 FPS 속도로 갱신 주기 작동
         self.loop_id = self.root.after(30, self.update_frame)
 
