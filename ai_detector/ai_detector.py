@@ -187,11 +187,19 @@ class MuggleBlockerDetector:
         try:
             # 1. dlib 감지기로 이미지 내 모든 얼굴 좌표 파악
             face_locations = face_recognition.face_locations(frame_rgb)
+
+            # [1 단계] 얼굴이 아예 없을 때 -> AWAY
             if not face_locations:
                 self.status = "AWAY"
                 return
+            
+            # [2 단계] 얼굴이 2개 이상일 때 -> 무조건 INTRUSION 차단!
+            if len(face_locations) >= 2:
+                self.status = "INTRUSION"
+                print(f"[AI] 🚨 화면에 {len(face_locations)}명 감지됨! (어깨너머 훔쳐보기 방어 격발!)")
+                return
 
-            # 2. 감지된 첫 번째 얼굴의 인코딩 백터 추출
+            # [3단계] 감지된 첫 번째 얼굴의 인코딩 백터 추출
             encodings = face_recognition.face_encodings(frame_rgb, face_locations)
             if self.user_encoding is not None and encodings:
                 # 3. 등록된 주인(self.user_encoding)의 벡터와 현재 검출된 얼굴 벡터 1:1 비교
