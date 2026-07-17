@@ -183,7 +183,7 @@ class AppWindow:
             if current_os == "Windows":
                 self.root.after(500, self.root.grab_set)
 
-            # ⭐️ [핵심] 2. 상태에 맞는 외부 이펙트 시퀀스 호출
+            # 2. 상태에 맞는 외부 이펙트 시퀀스 호출
             if self.current_status == "INTRUSION":
                 # 외부 함수에 UI 제어권(self)을 넘겨서 애니메이션 실행
                 # play_intrusion_sequence(self) 
@@ -194,7 +194,7 @@ class AppWindow:
             else:
                 pass
             
-            # 4. 화면 넘어가는 동안 눌려있던 키보드 캐시 초기화
+            # 3. 화면 넘어가는 동안 눌려있던 키보드 캐시 초기화
             if hasattr(self, 'pressed_keys'):
                 self.pressed_keys.clear()
 
@@ -218,7 +218,7 @@ class AppWindow:
             self.root.attributes("-topmost", False)
             self.root.geometry("1024x768")         
 
-            # ⭐️ [차단 해제] 3. 팀원분이 그려둔 외부 이펙트(캔버스) 싹 치우기
+            # 4. 팀원분이 그려둔 외부 이펙트(캔버스) 싹 치우기
             if hasattr(self, 'effect_canvas') and self.effect_canvas:
                 self.effect_canvas.place_forget()
                 self.effect_canvas = None # 메모리 정리
