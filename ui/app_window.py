@@ -25,6 +25,11 @@ class AppWindow:
         self.is_running = False  # 시작 버튼 제어용 플래그
         self.loop_id = None      # tkinter after 예약 취소용 ID
         self.user_registered = False # 본인 신원 등록 완료 여부 플래그
+        self.pressed_keys = set() # 단축키 검사 세트 (실시간 추적)
+
+        # 창 전체(root_all)에서 키가 눌릴 때와 뗄 때를 감지
+        self.root.bind_all("<KeyPress>", self._tk_on_press)
+        self.root.bind_all("<KeyRelease>", self._tk_on_release)
         
         # Canvas 내부 이미지 갱신용 객체 ID 저장 변수
         self.canvas_image_id = None
@@ -101,13 +106,15 @@ class AppWindow:
             self._analyze_frame(frame_rgb)
             self.current_status = self.detector.get_status()
 
-        # [추가] 사용자가 다시 정상 감지(NORMAL)되면 자동으로 보안 잠금을 해제합니다.
-        if self.current_status == "NORMAL" and self.controller.is_locked:
-            print("[시스템] 사용자 본인 확인 완료 -> 보안 잠금 해제!")
-            self._trigger_system_unlock()
-        elif self.current_status in ["INTRUSION", "AWAY"] and not self.controller.is_locked: # 반대 경우 추가
-                print(f"[시스템] 🚨 {self.current_status} 감지! -> 보안 잠금 실행!")
-                self._trigger_system_lock()
+        if not self.controller.is_locked:
+                # 1. 방어막이 꺼져있을 때(안 잠김) 머글이 나타나면 -> 잠근다!
+                if self.current_status in ["INTRUSION", "AWAY"]:
+                    print(f"[시스템] 🚨 {self.current_status} 감지! -> 보안 잠금 실행!")
+                    self._trigger_system_lock()
+                else:
+                    # 2. 이미 방어막이 켜져있다면(잠김) -> AI가 NORMAL이라 해도 무시한다!
+                    # (잠금 해제는 SystemController의 단축키가 알아서 처리하게 둡니다)
+                    pass
 
         # 1. 컨트롤러 가동 상태(is_locked) 체크
         if self.controller.is_locked:
@@ -124,19 +131,12 @@ class AppWindow:
                 self.canvas_image_id = None
                 self.canvas.create_text(320, 180, text="Mischief Managed", fill="red", font=("Helvetica", 18))
             
-            # [중복 제거] 잠금 상태에서도 해제를 계속 감시하기 위해 실시간 연산은 백그라운드 구동
-            # ret, frame_rgb = self.streamer.get_frame(intrusion_mode=False)
-            # if ret and frame_rgb is not None:
-            #     self._analyze_frame(frame_rgb)
 
         else:
             # 정상 감시 상태인 경우: 웹캠 프레임 정상 출력
             self.status_label.config(text="보안 감시 중...", fg="green")
 
-            # [중복 제거] ret, frame = self.streamer.get_frame() 
-
-            #if ret and frame is not None:
-                # BGR -> RGB 및 ImageTk 변환
+            # BGR -> RGB 및 ImageTk 변환
             img = Image.fromarray(frame_rgb)
             img = img.resize((self.canvas_w, self.canvas_h)) # 카메라 크기 줄이기
             self.photo = ImageTk.PhotoImage(image=img)
@@ -158,23 +158,51 @@ class AppWindow:
     def _trigger_system_lock(self):
         """컨트롤러의 메서드 형태에 무관하게 안전하게 잠금을 실행하는 안전 트리거 함수"""
         try:
-            if hasattr(self.controller, "lock") and callable(getattr(self.controller, "lock")):
-                self.controller.lock()
-            elif hasattr(self.controller, "lock_system") and callable(getattr(self.controller, "lock_system")):
-                self.controller.lock_system()
+            if hasattr(self.controller, "lock_screen"):
+                self.controller.lock_screen()
             else:
-                self.controller.is_locked = True
+                self.controller.is_locked = True # 만약을 대비한 예외 처리
+
+            # ⭐️ [핵심] 잠기는 순간 Tkinter 창이 키보드 이벤트를 무조건 받도록 포커스 강제 강탈!
+            self.root.focus_force()
+            self.root.lift() # 창을 맨 위로 띄우기
+
         except Exception as e:
-            print(f"[경고] 시스템 컨트롤러 잠금 전환 실패: {e}")
+            print(f"[경고] 시스템 컨트롤러 물리 잠금 격발 실패: {e}")
 
     def _trigger_system_unlock(self):
         """잠금을 실행한 것과 대칭되게 안전하게 잠금을 해제(Unlock)하는 안전 트리거 함수"""
         try:
-            if hasattr(self.controller, "unlock") and callable(getattr(self.controller, "unlock")):
-                self.controller.unlock()
-            elif hasattr(self.controller, "unlock_system") and callable(getattr(self.controller, "unlock_system")):
-                self.controller.unlock_system()
+            # 단축키를 안 눌렀더라도, AI가 주인을 알아봤다면 리스너를 꺼줘야 함
+            if hasattr(self.controller, "unlock_screen"):
+                self.controller.unlock_screen()
             else:
                 self.controller.is_locked = False
         except Exception as e:
             print(f"[경고] 시스템 컨트롤러 잠금 해제 실패: {e}")
+
+    def _tk_on_press(self, event):
+        """키가 눌렸을 때 실행 (맥/윈도우 호환 키 트래커)"""
+        # 소문자로 변환하여 알파벳 및 키 이름 저장
+        self.pressed_keys.add(event.keysym.lower())
+        
+        # 1. Ctrl 키가 눌려있는지 확인 ('control'이 포함된 모든 키 심볼 대응)
+        has_ctrl = any('control' in k for k in self.pressed_keys)
+        
+        # 2. Shift 키가 눌려있는지 확인 ('shift'가 포함된 모든 키 심볼 대응)
+        has_shift = any('shift' in k for k in self.pressed_keys)
+        
+        # 3. 'm' 키가 눌려있는지 확인
+        has_m = 'm' in self.pressed_keys
+
+        # 세 키가 동시에 눌렸고, 현재 화면이 잠겨있는 상태라면?
+        if has_ctrl and has_shift and has_m:
+            if self.controller.is_locked:
+                print("[시스템] 비밀 단축키 입력 감지! 잠금을 해제합니다.")
+                self.controller.unlock_screen()
+
+    def _tk_on_release(self, event):
+        """키에서 손을 텄을 때 실행"""
+        keysym = event.keysym.lower()
+        if keysym in self.pressed_keys:
+            self.pressed_keys.remove(keysym)

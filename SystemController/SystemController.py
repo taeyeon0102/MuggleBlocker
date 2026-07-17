@@ -1,22 +1,36 @@
-from pynput import keyboard, mouse
+from pynput import keyboard
 
 class SystemController:
+    def __init__(self):
+        self.is_locked = False # 차단 제어 플래그
+
+    def lock_screen(self):
+        if self.is_locked:
+            return 
+        self.is_locked = True
+        print(f"화면 블럭")
+        # pynput 리스너 없이 UI 오버레이와 연동
+
+    def unlock_screen(self):
+        if not self.is_locked:
+            return
+        self.is_locked = False
+        print("화면 블럭 해제")
+
+    """
     def __init__(self):
         # 1. 상태 변수
         self.is_locked = False
 
         # 2. 방어막 (입력 차단) 리스너 함수 
         self.keyboard_block_listener = None
-        self.mouse_block_listener = None
+        # self.mouse_block_listener = None
 
         # 3. 현재 눌린 키 저장
         self.current_keys = set()
 
-        # Tkinter 객체 창 초기화 가능
-
-
     # AI 파이프라인에서 사람 감지/자리 비움 시 호출하는 함수
-    def lock_screen(self, state):
+    def lock_screen(self):
 
         # 1. 이미 잠겨있으면(활성화되어 있으면) 무시
         if self.is_locked:
@@ -33,13 +47,14 @@ class SystemController:
         self.keyboard_block_listener = keyboard.Listener(
             on_press = self._on_press,
             on_release = self._on_release,
-            suppress = True
+            suppress = False # 맥 환경에서 충돌로 자꾸 프로그램이 터지므로,,, ㅠㅜ
             )
         self.keyboard_block_listener.start()
+        
 
         # 5. 마우스 입력을 차단하는 리스너 실행
-        self.mouse_block_listener = mouse.Listener(suppress = True)
-        self.mouse_block_listener.start()
+        # self.mouse_block_listener = mouse.Listener(suppress = True)
+        # self.mouse_block_listener.start()
 
     # 비밀 단축키가 눌렸을 때 자체적으로 호출하는 함수
     def unlock_screen(self):
@@ -57,11 +72,12 @@ class SystemController:
         if self.keyboard_block_listener is not None:
             self.keyboard_block_listener.stop()
             self.keyboard_block_listener = None
+        
 
         # 5. 마우스 차단 리스너 중지
-        if self.mouse_block_listener is not None:
-            self.mouse_block_listener.stop()
-            self.mouse_block_listener = None
+        # if self.mouse_block_listener is not None:
+        #     self.mouse_block_listener.stop()
+        #     self.mouse_block_listener = None
 
     # 키가 눌렸을 때 실행되는 함수 (내부용)
     def _on_press(self, key):
@@ -113,3 +129,5 @@ if __name__ == "__main__":
             time.sleep(1)
     except KeyboardInterrupt:
         pass
+        
+"""
