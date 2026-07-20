@@ -2,13 +2,15 @@ import tkinter as tk
 import time
 import os # 애플스크립트 이용, 프로세스 종료 등
 import platform # 운영체제 알아내기
-from PIL import Image, ImageTk
+
+from PIL import Image, ImageTk, ImageGrab # 현재 화면 캡처
+import numpy as np
+import cv2
+
 from pipeline.video_stream import VideoStreamer
 from SystemController.SystemController import SystemController # 컨트롤러 임포트
 from ai_detector.ai_detector import MuggleBlockerDetector # AI 디텍터 임포트
-
-# ⭐️ 추후 이펙트 파일을 만드시면 아래 주석을 풀고 사용하세요!
-# from ui.effects.intrusion_effect import play_intrusion_sequence
+from ui.effects.intrusion_effect import play_intrusion_sequence
 from ui.effects.away_effect import play_away_sequence
 
 class AppWindow:
@@ -16,7 +18,7 @@ class AppWindow:
         self.root = root
         self.root.title("Muggle Blocker - UI")
         
-        # [수정] 맥북 전체 화면 덮기 & 모니터 해상도 자동 계산!
+        # 맥북 전체 화면 덮기 & 모니터 해상도 자동 계산
         self.root.geometry("1024x768")
         
         # 1. AI 디텍터, 시스템 컨트롤러 및 비디오 스트리머 초기화
@@ -55,7 +57,7 @@ class AppWindow:
             self.fake_bg = Image.open("Assets/fake_desktop_wallpaper.png").resize((self.canvas_w, self.canvas_h))
             self.fake_photo = ImageTk.PhotoImage(self.fake_bg)
             
-            # ⭐️ [추가] 모니터 전체를 덮을 거대한 풀스크린 이미지 (이펙트용)
+            # [추가] 모니터 전체를 덮을 거대한 풀스크린 이미지 (이펙트용)
             self.fake_bg_full = Image.open("Assets/fake_desktop_wallpaper.png").resize((self.screen_w, self.screen_h))
             self.fake_photo_full = ImageTk.PhotoImage(self.fake_bg_full)
         except Exception:
@@ -73,11 +75,11 @@ class AppWindow:
         self.canvas = tk.Canvas(root, width=self.canvas_w, height=self.canvas_h, bg="black")
         self.canvas.pack(pady=10)
         
-        # 3. 제어 버튼 하단 배치
+        # 2. 제어 버튼 하단 배치
         self.btn_toggle = tk.Button(root, text="방어막 켜기 (ON)", command=self.toggle_system, font=("Helvetica", 11))
         self.btn_toggle.pack(pady=10)
         
-        # ⭐️ [추가] "X" 버튼 클릭 시 찌꺼기(웹캠 스레드) 없이 안전하게 자폭하도록 연결
+        # "X" 버튼 클릭 시 찌꺼기(웹캠 스레드) 없이 안전하게 자폭하도록 연결
         self.root.protocol("WM_DELETE_WINDOW", self.on_closing)
         
     def toggle_system(self):
@@ -126,18 +128,18 @@ class AppWindow:
                 print(f"[시스템] 🚨 {self.current_status} 감지! -> 보안 잠금 실행!")
                 self._trigger_system_lock()
 
-        # 1. 컨트롤러 가동 상태(is_locked) 체크
+        # 컨트롤러 가동 상태(is_locked) 체크
         if self.controller.is_locked:
             self.status_label.config(text="보안 잠금 활성화 (Mischief Managed)", fg="darkred")
-            if self.fake_photo:
+            if self.fake_photo_full:
                 if self.canvas_image_id is None:
-                    self.canvas_image_id = self.canvas.create_image(0, 0, anchor=tk.NW, image=self.fake_photo)
+                    self.canvas_image_id = self.canvas.create_image(0, 0, anchor=tk.NW, image=self.fake_photo_full)
                 else:
-                    self.canvas.itemconfig(self.canvas_image_id, image=self.fake_photo)
+                    self.canvas.itemconfig(self.canvas_image_id, image=self.fake_photo_full)
             else:
                 self.canvas.delete("all")
                 self.canvas_image_id = None
-                self.canvas.create_text(320, 180, text="Mischief Managed", fill="red", font=("Helvetica", 18))
+                self.canvas.create_text(self.screen_w//2, self.screen_h//2, text="Mischief Managed", fill="red", font=("Helvetica", 32))
             
         else:
             self.status_label.config(text="보안 감시 중...", fg="green")
@@ -165,36 +167,64 @@ class AppWindow:
             else:
                 self.controller.is_locked = True 
 
+            # [핵심 추가] Tkinter 창이 풀스크린으로 화면을 덮기 '직전'에 현재 바탕화면 캡처!
+            try:
+                # 모니터 해상도만큼 캡처 후 OpenCV(BGR) 포맷으로 변환
+                screen_img = ImageGrab.grab(bbox=(0, 0, self.screen_w, self.screen_h))
+                self.captured_desktop = cv2.cvtColor(np.array(screen_img), cv2.COLOR_RGB2BGR)
+            except Exception as e:
+                print(f"[경고] 화면 캡처 실패 (권한 문제 등): {e}")
+                # 캡처 실패 시 검은 화면 대체
+                self.captured_desktop = np.full((self.screen_h, self.screen_w, 3), 0, dtype=np.uint8)
+
+            # 2. 창 속성을 건드리기 전에, 캔버스를 '방금 캡처한 바탕화면'으로 즉시 덮어씌움 (카메라 노출 원천 차단)
+            cv2_im_rgb = cv2.cvtColor(self.captured_desktop, cv2.COLOR_BGR2RGB)
+            self.photo = ImageTk.PhotoImage(image=Image.fromarray(cv2_im_rgb))
+            if self.canvas_image_id is None:
+                self.canvas_image_id = self.canvas.create_image(0, 0, anchor="nw", image=self.photo)
+            else:
+                self.canvas.itemconfig(self.canvas_image_id, image=self.photo)
+
+            # [수정] 방해되는 기존 UI 요소들 숨기기
+            self.title_label.pack_forget()
+            self.status_label.pack_forget()
+            self.btn_toggle.pack_forget()
+
+            # [수정] 캔버스 크기를 풀스크린으로 강제 확장
+            self.canvas.config(width=self.screen_w, height=self.screen_h)
+            self.canvas.pack(fill="both", expand=True)
+
+            self.root.update() # 화면에 카메라 대신 바탕화면 캡처본이 먼저 박히도록 강제 렌더링!
+
+            # 3. Mac 화면 스와이프를 막기 위해 overrideredirect 도입
             current_os = platform.system()
 
-            if current_os == "Darwin": 
-                pid = os.getpid()
-                os.system(f"osascript -e 'tell application \"System Events\" to set frontmost of the first process whose unix id is {pid} to true'")
-            elif current_os == "Windows":
-                self.root.overrideredirect(True)
-
-            # 1. 화면 띄우고 덮기
-            self.root.deiconify() 
+            self.root.overrideredirect(True) 
+            self.root.geometry(f"{self.screen_w}x{self.screen_h}+0+0")
             self.root.attributes("-topmost", True)
             self.root.lift()
-            self.root.geometry(f"{self.screen_w}x{self.screen_h}+0+0")
-            self.root.after(500, self.root.focus_force) 
+            
+            self.root.update()
+            
+            if current_os == "Darwin":
+                pid = os.getpid()
+                os.system(f"osascript -e 'tell application \"System Events\" to set frontmost of the first process whose unix id is {pid} to true'")
+        
+            self.root.focus_force()
+            self.canvas.focus_set()
 
-            if current_os == "Windows":
-                self.root.after(500, self.root.grab_set)
+            # 단축키 포커스를 잃었을 때를 대비한 마우스 클릭 복구 바인딩 (보험)
+            self.root.bind("<Button-1>", lambda e: self.root.focus_force())
 
-            # 2. 상태에 맞는 외부 이펙트 시퀀스 호출
+
+            # 4. 상태에 맞는 외부 이펙트 시퀀스 호출
             if self.current_status == "INTRUSION":
                 # 외부 함수에 UI 제어권(self)을 넘겨서 애니메이션 실행
-                # play_intrusion_sequence(self) 
-                pass
+                play_intrusion_sequence(self) 
             elif self.current_status == "AWAY":
-                    play_away_sequence(self)
-                    pass
-            else:
-                pass
+                play_away_sequence(self)
             
-            # 3. 화면 넘어가는 동안 눌려있던 키보드 캐시 초기화
+            # 5. 화면 넘어가는 동안 눌려있던 키보드 캐시 초기화
             if hasattr(self, 'pressed_keys'):
                 self.pressed_keys.clear()
 
@@ -210,18 +240,38 @@ class AppWindow:
                 self.controller.is_locked = False
 
             current_os = platform.system()
-
-            if current_os == "Windows":
+            if current_os == "Darwin":
+                self.root.overrideredirect(False)
+                self.root.attributes("-fullscreen", False)
+                self.root.update()
+                time.sleep(0.1) # OS가 창을 줄일 시간을 아주 잠깐 줌
+            elif current_os == "Windows":
+                self.root.withdraw()
                 self.root.grab_release()
-                self.root.overrideredirect(False)      
+                self.root.overrideredirect(False)
+                self.root.deiconify()
 
             self.root.attributes("-topmost", False)
             self.root.geometry("1024x768")         
 
-            # 4. 팀원분이 그려둔 외부 이펙트(캔버스) 싹 치우기
-            if hasattr(self, 'effect_canvas') and self.effect_canvas:
-                self.effect_canvas.place_forget()
-                self.effect_canvas = None # 메모리 정리
+            # 캔버스 크기 원상 복구 및 UI 재배치
+            self.canvas.pack_forget() # 패킹 순서 초기화를 위해 일단 제거
+            self.canvas.config(width=self.canvas_w, height=self.canvas_h)
+            
+            # 기존 순서대로 다시 pack()
+            self.title_label.pack(pady=10)
+            self.status_label.pack(pady=5)
+            self.canvas.pack(pady=10)
+            self.btn_toggle.pack(pady=10)
+
+            # 원래 UI로 깔끔하게 다시 표시
+            self.root.update()
+
+            # 해제 시에도 포커스를 잃지 않도록 강제
+            if current_os == "Darwin":
+                pid = os.getpid()
+                os.system(f"osascript -e 'tell application \"System Events\" to set frontmost of the first process whose unix id is {pid} to true'")
+            self.root.focus_force()
 
         except Exception as e:
             print(f"[경고] 시스템 컨트롤러 잠금 해제 실패: {e}")
@@ -243,15 +293,16 @@ class AppWindow:
             self.pressed_keys.remove(keysym)
 
     def on_closing(self):
-        """[시스템] 윈도우 종료 이벤트 핸들러: 프로그램 완전 자폭 (좀비 프로세스 방지)"""
-        print("[시스템] 프로그램을 안전하게 종료합니다...")
-        self.is_running = False 
+        """앱 종료 시 백그라운드 스레드까지 모조리 죽이고 터미널을 즉시 반환하는 강제 종료"""
+        print("[시스템] 프로그램을 완전히 종료합니다...")
         
-        if hasattr(self, 'streamer') and self.streamer:
-            try:
-                self.streamer.stop() 
-            except:
-                pass
-                
-        self.root.destroy()
-        os._exit(0) # 완벽한 백그라운드 킬
+        try:
+            # 1. Tkinter 창 종료
+            self.root.quit()
+            self.root.destroy()
+        except Exception as e:
+            pass
+        finally:
+            # 2. ⭐️ [핵심] 터미널을 물고 있는 파이썬 프로세스를 강제로 즉각 처형!
+            import os
+            os._exit(0)
