@@ -6,6 +6,7 @@ import platform # 운영체제 알아내기
 from PIL import Image, ImageTk, ImageGrab # 현재 화면 캡처
 import numpy as np
 import cv2
+from pynput import keyboard # OS 레벨 글로벌 단축키 감지용
 
 from pipeline.video_stream import VideoStreamer
 from SystemController.SystemController import SystemController # 컨트롤러 임포트
@@ -34,6 +35,7 @@ class AppWindow:
         self.loop_id = None      # tkinter after 예약 취소용 ID
         self.user_registered = False # 본인 신원 등록 완료 여부 플래그
         self.pressed_keys = set() # 단축키 검사 세트 (실시간 추적)
+        self.global_pressed_keys = set() # OS 백그라운드 단축키 수신 세트
 
         # [추가] 내 노트북 모니터의 전체 가로, 세로 픽셀 사이즈를 자동 측정해서 저장
         self.screen_w = self.root.winfo_screenwidth()
@@ -79,9 +81,52 @@ class AppWindow:
         self.btn_toggle = tk.Button(root, text="방어막 켜기 (ON)", command=self.toggle_system, font=("Helvetica", 11))
         self.btn_toggle.pack(pady=10)
         
+        # OS 레벨 글로벌 키보드 백그라운드 리스너 구동 (포커스 상태 무관 감지)
+        self.pynput_listener = keyboard.Listener(
+            on_press=self._on_global_key_press,
+            on_release=self._on_global_key_release
+        )
+        self.pynput_listener.daemon = True
+        self.pynput_listener.start()
+
         # "X" 버튼 클릭 시 찌꺼기(웹캠 스레드) 없이 안전하게 자폭하도록 연결
         self.root.protocol("WM_DELETE_WINDOW", self.on_closing)
-        
+
+    def _on_global_key_press(self, key):
+        """pynput 백그라운드 스레드에서 수신되는 글로벌 KeyPress 이벤트"""
+        try:
+            if hasattr(key, 'char') and key.char:
+                self.global_pressed_keys.add(key.char.lower())
+            elif hasattr(key, 'name') and key.name:
+                self.global_pressed_keys.add(key.name.lower())
+            else:
+                self.global_pressed_keys.add(str(key).lower())
+        except Exception:
+            pass
+
+        has_ctrl = any(k in self.global_pressed_keys for k in ['ctrl', 'ctrl_l', 'ctrl_r', 'key.ctrl', 'key.ctrl_l', 'key.ctrl_r'])
+        has_shift = any(k in self.global_pressed_keys for k in ['shift', 'shift_l', 'shift_r', 'key.shift', 'key.shift_l', 'key.shift_r'])
+        has_m = 'm' in self.global_pressed_keys
+
+        if has_ctrl and has_shift and has_m:
+            is_canvas_active = hasattr(self, 'effect_canvas') and self.effect_canvas is not None
+            if self.controller.is_locked or is_canvas_active:
+                print("\n[시스템] 🔑 글로벌 비밀 단축키(Ctrl+Shift+M) 입력 감지! 잠금을 해제합니다.")
+                self.global_pressed_keys.clear()
+                self.root.after(0, self._trigger_system_unlock)
+
+    def _on_global_key_release(self, key):
+        """pynput 백그라운드 스레드에서 수신되는 글로벌 KeyRelease 이벤트"""
+        try:
+            if hasattr(key, 'char') and key.char:
+                self.global_pressed_keys.discard(key.char.lower())
+            elif hasattr(key, 'name') and key.name:
+                self.global_pressed_keys.discard(key.name.lower())
+            else:
+                self.global_pressed_keys.discard(str(key).lower())
+        except Exception:
+            pass
+
     def toggle_system(self):
         """방어막 ON/OFF 전환 버튼 제어 함수"""
         if not self.is_running:
@@ -122,14 +167,28 @@ class AppWindow:
             self._analyze_frame(frame_rgb)
             self.current_status = self.detector.get_status()
 
-        if not self.controller.is_locked:
-            # 1. 방어막이 꺼져있을 때(안 잠김) 머글이 나타나면 -> 잠근다!
+        # 잠금 상태 및 외부 이펙트 캔버스 활성화 여부 확인
+        is_effect_active = hasattr(self, 'effect_canvas') and self.effect_canvas is not None
+
+        # ⭐️ [핵심 보완] 잠긴 상태에서는 확실히 NORMAL 상태 & 유사도 조건 만족할 때만 해제
+        if (self.controller.is_locked or is_effect_active):
+            detector_status = getattr(self.detector, 'status', '') if self.detector else ''
+            
+            # 디텍터 내부에 similarity 속성이 존재한다면 0.70 이상인지 이중 체크
+            current_sim = getattr(self.detector, 'last_similarity', getattr(self.detector, 'similarity', 1.0))
+            
+            if self.current_status == "NORMAL" and detector_status == "NORMAL" and current_sim >= 0.70:
+                print("[시스템] 🔓 주인 신원 인증 완료 (NORMAL) -> 보안 잠금을 해제합니다.")
+                self._trigger_system_unlock()
+
+        if not self.controller.is_locked and not is_effect_active:
+            # 1. 방어막이 꺼져있을 때(안 잠김) 머글이나 부재(AWAY)가 나타나면 -> 잠근다!
             if self.current_status in ["INTRUSION", "AWAY"]:
                 print(f"[시스템] 🚨 {self.current_status} 감지! -> 보안 잠금 실행!")
                 self._trigger_system_lock()
 
         # 컨트롤러 가동 상태(is_locked) 체크
-        if self.controller.is_locked:
+        if self.controller.is_locked or is_effect_active:
             self.status_label.config(text="보안 잠금 활성화 (Mischief Managed)", fg="darkred")
             if self.fake_photo_full:
                 if self.canvas_image_id is None:
@@ -167,7 +226,7 @@ class AppWindow:
             else:
                 self.controller.is_locked = True 
 
-            # [핵심 추가] Tkinter 창이 풀스크린으로 화면을 덮기 '직전'에 현재 바탕화면 캡처!
+            # Tkinter 창이 풀스크린으로 화면을 덮기 '직전'에 현재 바탕화면 캡처!
             try:
                 # 모니터 해상도만큼 캡처 후 OpenCV(BGR) 포맷으로 변환
                 screen_img = ImageGrab.grab(bbox=(0, 0, self.screen_w, self.screen_h))
@@ -177,7 +236,7 @@ class AppWindow:
                 # 캡처 실패 시 검은 화면 대체
                 self.captured_desktop = np.full((self.screen_h, self.screen_w, 3), 0, dtype=np.uint8)
 
-            # 2. 창 속성을 건드리기 전에, 캔버스를 '방금 캡처한 바탕화면'으로 즉시 덮어씌움 (카메라 노출 원천 차단)
+            # 창 속성을 건드리기 전에, 캔버스를 '방금 캡처한 바탕화면'으로 즉시 덮어씌움
             cv2_im_rgb = cv2.cvtColor(self.captured_desktop, cv2.COLOR_BGR2RGB)
             self.photo = ImageTk.PhotoImage(image=Image.fromarray(cv2_im_rgb))
             if self.canvas_image_id is None:
@@ -185,18 +244,18 @@ class AppWindow:
             else:
                 self.canvas.itemconfig(self.canvas_image_id, image=self.photo)
 
-            # [수정] 방해되는 기존 UI 요소들 숨기기
+            # 방해되는 기존 UI 요소들 숨기기
             self.title_label.pack_forget()
             self.status_label.pack_forget()
             self.btn_toggle.pack_forget()
 
-            # [수정] 캔버스 크기를 풀스크린으로 강제 확장
+            # 캔버스 크기를 풀스크린으로 강제 확장
             self.canvas.config(width=self.screen_w, height=self.screen_h)
             self.canvas.pack(fill="both", expand=True)
 
-            self.root.update() # 화면에 카메라 대신 바탕화면 캡처본이 먼저 박히도록 강제 렌더링!
+            self.root.update()
 
-            # 3. Mac 화면 스와이프를 막기 위해 overrideredirect 도입
+            # 풀스크린 상단 고정 처리
             current_os = platform.system()
 
             self.root.overrideredirect(True) 
@@ -210,21 +269,20 @@ class AppWindow:
                 pid = os.getpid()
                 os.system(f"osascript -e 'tell application \"System Events\" to set frontmost of the first process whose unix id is {pid} to true'")
         
+            # 최상단 창 및 캔버스로 포커스 강제 획득
             self.root.focus_force()
             self.canvas.focus_set()
 
-            # 단축키 포커스를 잃었을 때를 대비한 마우스 클릭 복구 바인딩 (보험)
-            self.root.bind("<Button-1>", lambda e: self.root.focus_force())
+            # 화면 아무 곳이나 마우스 클릭 시 즉시 키보드 포커스 재탈환
+            self.root.bind_all("<Button-1>", lambda e: self.root.focus_force())
 
-
-            # 4. 상태에 맞는 외부 이펙트 시퀀스 호출
+            # 상태에 맞는 외부 이펙트 시퀀스 호출
             if self.current_status == "INTRUSION":
-                # 외부 함수에 UI 제어권(self)을 넘겨서 애니메이션 실행
                 play_intrusion_sequence(self) 
             elif self.current_status == "AWAY":
                 play_away_sequence(self)
             
-            # 5. 화면 넘어가는 동안 눌려있던 키보드 캐시 초기화
+            # 화면 넘어가는 동안 눌려있던 키보드 캐시 초기화
             if hasattr(self, 'pressed_keys'):
                 self.pressed_keys.clear()
 
@@ -238,6 +296,11 @@ class AppWindow:
                 self.controller.unlock_screen()
             else:
                 self.controller.is_locked = False
+
+            # 잠금 해제 시 상태를 NORMAL로 재설정
+            self.current_status = "NORMAL"
+            if self.detector is not None and hasattr(self.detector, 'status'):
+                self.detector.status = "NORMAL"
 
             current_os = platform.system()
             if current_os == "Darwin":
@@ -253,6 +316,15 @@ class AppWindow:
 
             self.root.attributes("-topmost", False)
             self.root.geometry("1024x768")         
+
+            # ⭐️ 화면을 덮고 있던 풀스크린 이펙트 캔버스(away/intrusion)를 완전히 파기하여 제거
+            if hasattr(self, 'effect_canvas') and self.effect_canvas is not None:
+                try:
+                    self.effect_canvas.place_forget()
+                    self.effect_canvas.destroy()
+                except Exception:
+                    pass
+                self.effect_canvas = None
 
             # 캔버스 크기 원상 복구 및 UI 재배치
             self.canvas.pack_forget() # 패킹 순서 초기화를 위해 일단 제거
@@ -277,32 +349,48 @@ class AppWindow:
             print(f"[경고] 시스템 컨트롤러 잠금 해제 실패: {e}")
 
     def _tk_on_press(self, event):
-        self.pressed_keys.add(event.keysym.lower())
-        has_ctrl = any('control' in k for k in self.pressed_keys)
-        has_shift = any('shift' in k for k in self.pressed_keys)
+        keysym = event.keysym.lower() if event.keysym else ""
+        char = event.char.lower() if event.char else ""
+        
+        if keysym:
+            self.pressed_keys.add(keysym)
+        if char:
+            self.pressed_keys.add(char)
+
+        # OS 조합키(Control, Shift) 대응
+        has_ctrl = any(k in self.pressed_keys for k in ['control_l', 'control_r', 'control', 'ctrl'])
+        has_shift = any(k in self.pressed_keys for k in ['shift_l', 'shift_r', 'shift'])
         has_m = 'm' in self.pressed_keys
 
+        # 컨트롤러 잠금(is_locked) 상태이거나 외부 이펙트 캔버스(effect_canvas)가 활성화된 상태라면 비밀 단축키 격발
         if has_ctrl and has_shift and has_m:
-            if self.controller.is_locked:
-                print("[시스템] 비밀 단축키 입력 감지! 잠금을 해제합니다.")
+            is_canvas_active = hasattr(self, 'effect_canvas') and self.effect_canvas is not None
+            if self.controller.is_locked or is_canvas_active:
+                print("[시스템] 비밀 단축키(Ctrl+Shift+M) 입력 감지! 잠금을 해제합니다.")
                 self._trigger_system_unlock()
 
     def _tk_on_release(self, event):
-        keysym = event.keysym.lower()
+        keysym = event.keysym.lower() if event.keysym else ""
+        char = event.char.lower() if event.char else ""
+        
         if keysym in self.pressed_keys:
             self.pressed_keys.remove(keysym)
+        if char in self.pressed_keys:
+            self.pressed_keys.remove(char)
 
     def on_closing(self):
         """앱 종료 시 백그라운드 스레드까지 모조리 죽이고 터미널을 즉시 반환하는 강제 종료"""
         print("[시스템] 프로그램을 완전히 종료합니다...")
         
         try:
+            if hasattr(self, 'pynput_listener') and self.pynput_listener:
+                self.pynput_listener.stop()
             # 1. Tkinter 창 종료
             self.root.quit()
             self.root.destroy()
         except Exception as e:
             pass
         finally:
-            # 2. ⭐️ [핵심] 터미널을 물고 있는 파이썬 프로세스를 강제로 즉각 처형!
+            # 2. 터미널을 물고 있는 파이썬 프로세스를 강제로 즉각 처형!
             import os
             os._exit(0)
