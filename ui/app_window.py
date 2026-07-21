@@ -6,7 +6,6 @@ import platform # 운영체제 알아내기
 from PIL import Image, ImageTk, ImageGrab # 현재 화면 캡처
 import numpy as np
 import cv2
-from pynput import keyboard # OS 레벨 글로벌 단축키 감지용
 
 from pipeline.video_stream import VideoStreamer
 from SystemController.SystemController import SystemController # 컨트롤러 임포트
@@ -82,12 +81,19 @@ class AppWindow:
         self.btn_toggle.pack(pady=10)
         
         # OS 레벨 글로벌 키보드 백그라운드 리스너 구동 (포커스 상태 무관 감지)
-        self.pynput_listener = keyboard.Listener(
-            on_press=self._on_global_key_press,
-            on_release=self._on_global_key_release
-        )
-        self.pynput_listener.daemon = True
-        self.pynput_listener.start()
+        self.pynput_listener = None # 맥을 위해 기본값은 None으로 설정
+        # 운영체제가 '윈도우(Windows)'일 때만 pynput 라이브러리를 켜기!
+        if platform.system() == "Windows":
+            from pynput import keyboard # 윈도우에서만 임포트
+            self.pynput_listener = keyboard.Listener(
+                on_press=self._on_global_key_press,
+                on_release=self._on_global_key_release
+            )
+            self.pynput_listener.daemon = True
+            self.pynput_listener.start()
+            print("[시스템] 🪟 Windows 환경 감지: 백그라운드 단축키 활성화")
+        else:
+            print("[시스템] 🍎 macOS 환경 감지: 백그라운드 단축키 비활성화 (Face-ID로 대체)")
 
         # "X" 버튼 클릭 시 찌꺼기(웹캠 스레드) 없이 안전하게 자폭하도록 연결
         self.root.protocol("WM_DELETE_WINDOW", self.on_closing)
@@ -184,8 +190,10 @@ class AppWindow:
         if not self.controller.is_locked and not is_effect_active:
             # 1. 방어막이 꺼져있을 때(안 잠김) 머글이나 부재(AWAY)가 나타나면 -> 잠근다!
             if self.current_status in ["INTRUSION", "AWAY"]:
-                print(f"[시스템] 🚨 {self.current_status} 감지! -> 보안 잠금 실행!")
-                self._trigger_system_lock()
+                # 잠금을 푼 지 3초가 안 지났다면 다시 잠그지 않고 무시!
+                if time.time() - getattr(self, 'last_unlock_time', 0) > 3.0:
+                    print(f"[시스템] 🚨 {self.current_status} 감지! -> 보안 잠금 실행!")
+                    self._trigger_system_lock()
 
         # 컨트롤러 가동 상태(is_locked) 체크
         if self.controller.is_locked or is_effect_active:
@@ -344,6 +352,11 @@ class AppWindow:
                 pid = os.getpid()
                 os.system(f"osascript -e 'tell application \"System Events\" to set frontmost of the first process whose unix id is {pid} to true'")
             self.root.focus_force()
+
+            # 꼬임 방지 및 쿨타임용 변수 세팅 (맨 마지막에 추가!)
+            if hasattr(self, 'pressed_keys'):
+                self.pressed_keys.clear()
+            self.last_unlock_time = time.time()
 
         except Exception as e:
             print(f"[경고] 시스템 컨트롤러 잠금 해제 실패: {e}")
