@@ -35,6 +35,7 @@ class MuggleBlockerDetector:
         self.last_recognition_time = 0
         self.recognition_interval = 2.0  # 분석 주기 (초)
         self.frame_offsets = {}  # 비동기 처리를 위한 딕셔너리
+        self.current_bboxes = []  # 추가: UI로 내보낼 BBox 좌표 저장 변수
 
         if self.use_dlib:
             # ==========================================================
@@ -81,6 +82,8 @@ class MuggleBlockerDetector:
         offsets = self.frame_offsets.pop(timestamp_ms, (0, 0, self.frame_width, self.frame_height))
         ox, oy, cw, ch = offsets
 
+        bboxes = []
+
         for detection in result.detections:
             bbox = detection.bounding_box
             # 프레임 내 상대 좌표를 절대 픽셀 좌표로 환산
@@ -88,10 +91,12 @@ class MuggleBlockerDetector:
             y = max(0, oy + bbox.origin_y)
             w = min(cw, bbox.width)
             h = min(ch, bbox.height)
+            bboxes.append((x, y, w, h))
 
             # 얼굴 원본 이미지 슬라이싱 및 대조 연산 실행
             if self.user_encoding is not None and not self.is_recognizing:
                 pass
+        self.current_bboxes = bboxes
 
     def register_user_face(self, frame_rgb):
         """본인 등록 함수 (첫 구동 시 최초 1회 호출)"""
@@ -177,6 +182,10 @@ class MuggleBlockerDetector:
     def get_status(self):
         """UI 루프에서 주기적으로 상태값('NORMAL', 'AWAY', 'INTRUSION')을 수거하는 함수"""
         return self.status
+    
+    def get_bboxes(self):
+        """UI 루프에서 BBox 좌표를 수거하는 함수"""
+        return self.current_bboxes
 
     # ==========================================================
     # 백그라운드 연산 스레드 메서드 영역
@@ -187,6 +196,7 @@ class MuggleBlockerDetector:
         try:
             # 1. dlib 감지기로 이미지 내 모든 얼굴 좌표 파악
             face_locations = face_recognition.face_locations(frame_rgb)
+            self.current_bboxes = [(left, top, right - left, bottom - top) for top, right, bottom, left in face_locations]
 
             # [1 단계] 얼굴이 아예 없을 때 -> AWAY
             if not face_locations:
