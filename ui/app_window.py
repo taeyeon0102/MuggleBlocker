@@ -185,12 +185,8 @@ class AppWindow:
 
         # ⭐️ [핵심 보완] 잠긴 상태에서는 확실히 NORMAL 상태 & 유사도 조건 만족할 때만 해제
         if (self.controller.is_locked or is_effect_active):
-            detector_status = getattr(self.detector, 'status', '') if self.detector else ''
-            
-            # 디텍터 내부에 similarity 속성이 존재한다면 0.70 이상인지 이중 체크
-            current_sim = getattr(self.detector, 'last_similarity', getattr(self.detector, 'similarity', 1.0))
-            
-            if self.current_status == "NORMAL" and detector_status == "NORMAL" and current_sim >= 0.70:
+            # [수정] 복잡한 구형 변수 체크를 지우고, AI가 NORMAL을 뱉으면 즉시 잠금 해제!
+            if self.current_status == "NORMAL":
                 print("[시스템] 🔓 주인 신원 인증 완료 (NORMAL) -> 보안 잠금을 해제합니다.")
                 self._trigger_system_unlock()
 
