@@ -173,7 +173,7 @@ class AppWindow:
         for box in bboxes:
             x, y, w, h = box
             cv2.rectangle(frame_rgb, (x, y), (x + w, y + h), (0, 255, 0), 2)
-            cv2.putText(frame_rgb, "Wizard", (x, y - 10), cv2.FONT_HERSHEY_SIMPLEX, 0.7, (0, 255, 0), 2)
+            cv2.putText(frame_rgb, "Face", (x, y - 10), cv2.FONT_HERSHEY_SIMPLEX, 0.7, (0, 255, 0), 2)
             
         # AI 디텍터 상태 피드백 확인
         if self.detector is not None and self.user_registered:
