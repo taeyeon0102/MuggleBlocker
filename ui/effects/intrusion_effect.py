@@ -40,7 +40,7 @@ def play_intrusion_sequence(app):
     # =========================================================
     # 1. 에셋 준비 (양피지 배경, 성에, 배경화면 등)
     # =========================================================
-    bg_path = "Assets/away_parchment_bg.png"
+    bg_path = "Assets/away_parchment_bg.jpg"
     if os.path.exists(bg_path):
         parchment_bg = cv2.imread(bg_path)
         parchment_bg = cv2.resize(parchment_bg, (w, h))

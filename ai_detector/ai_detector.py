@@ -35,6 +35,12 @@ class MuggleBlockerDetector:
         self.last_recognition_time = 0
         self.recognition_interval = 2.0  # 분석 주기 (초)
         self.frame_offsets = {}  # 비동기 처리를 위한 딕셔너리
+        self.current_bboxes = []  # 추가: UI로 내보낼 BBox 좌표 저장 변수
+
+        # 최적화 변수
+        self.frame_count = 0
+        self.frame_skip_interval = 1
+        self.intrusion_start_time = None
 
         if self.use_dlib:
             # ==========================================================
@@ -81,6 +87,8 @@ class MuggleBlockerDetector:
         offsets = self.frame_offsets.pop(timestamp_ms, (0, 0, self.frame_width, self.frame_height))
         ox, oy, cw, ch = offsets
 
+        bboxes = []
+
         for detection in result.detections:
             bbox = detection.bounding_box
             # 프레임 내 상대 좌표를 절대 픽셀 좌표로 환산
@@ -88,10 +96,12 @@ class MuggleBlockerDetector:
             y = max(0, oy + bbox.origin_y)
             w = min(cw, bbox.width)
             h = min(ch, bbox.height)
+            bboxes.append((x, y, w, h))
 
             # 얼굴 원본 이미지 슬라이싱 및 대조 연산 실행
             if self.user_encoding is not None and not self.is_recognizing:
                 pass
+        self.current_bboxes = bboxes
 
     def register_user_face(self, frame_rgb):
         """본인 등록 함수 (첫 구동 시 최초 1회 호출)"""
@@ -126,6 +136,12 @@ class MuggleBlockerDetector:
 
     def process_frame(self, frame_rgb, timestamp_ms):
         """실시간 프레임을 주입받아 얼굴 분석 예약을 수행하는 함수"""
+
+        # [최적화] 3프레임당 1프레임만 AI 연산 수행
+        self.frame_count += 1
+        if self.frame_count % self.frame_skip_interval != 0:
+            return
+        
         if self.use_dlib:
             # ==========================================================
             # [엔진 A] dlib 기반 실시간 검출 파이프라인
@@ -177,6 +193,10 @@ class MuggleBlockerDetector:
     def get_status(self):
         """UI 루프에서 주기적으로 상태값('NORMAL', 'AWAY', 'INTRUSION')을 수거하는 함수"""
         return self.status
+    
+    def get_bboxes(self):
+        """UI 루프에서 BBox 좌표를 수거하는 함수"""
+        return self.current_bboxes
 
     # ==========================================================
     # 백그라운드 연산 스레드 메서드 영역
@@ -187,7 +207,8 @@ class MuggleBlockerDetector:
         try:
             # 1. dlib 감지기로 이미지 내 모든 얼굴 좌표 파악
             face_locations = face_recognition.face_locations(frame_rgb)
-
+            self.current_bboxes = [(left, top, right - left, bottom - top) for top, right, bottom, left in face_locations]
+            
             # [1 단계] 얼굴이 아예 없을 때 -> AWAY
             if not face_locations:
                 self.status = "AWAY"
@@ -195,8 +216,7 @@ class MuggleBlockerDetector:
             
             # [2 단계] 얼굴이 2개 이상일 때 -> 무조건 INTRUSION 차단!
             if len(face_locations) >= 2:
-                self.status = "INTRUSION"
-                print(f"[AI] 🚨 화면에 {len(face_locations)}명 감지됨! (어깨너머 훔쳐보기 방어 격발!)")
+                self._trigger_intrusion_timer()
                 return
 
             # [3단계] 감지된 첫 번째 얼굴의 인코딩 백터 추출
@@ -208,10 +228,10 @@ class MuggleBlockerDetector:
                 
                 if matches[0]:
                     self.status = "NORMAL"
+                    self.intrusion_start_time = None # 💡 정상 인식 시 타이머 리셋
                     print("[AI] dlib 기반 사용자 본인 확인 완료")
                 else:
-                    self.status = "INTRUSION"
-                    print("[AI] dlib 기반 머글 침입 감지 격발!")
+                    self._trigger_intrusion_timer()
         except Exception as e:
             print(f"[경고] dlib 대조 중 에러: {e}")
 
@@ -229,12 +249,48 @@ class MuggleBlockerDetector:
             # 임계값(Threshold)에 따른 지능형 3단계 상태 변경
             if max_val >= 0.45:
                 self.status = "NORMAL"
+                self.intrusion_start_time = None # 💡 정상 인식 시 타이머 리셋
             elif max_val < 0.20:
-                self.status = "INTRUSION"
-                print("[AI] 머글 감지 격발!")
+                self._trigger_intrusion_timer()
             else:
                 pass
         except Exception as e:
             print(f"[경고] OpenCV 유사도 분석 오류: {e}")
         finally:
             self.is_recognizing = False
+
+    def _apply_ema_smoothing(self, new_bboxes):
+            """BBox가 부드럽게 움직이도록 좌표 스무딩(EMA) 적용"""
+            # 감지된 얼굴이 없으면 초기화
+            if not new_bboxes:
+                self.current_bboxes = []
+                return
+                
+            # 처음 얼굴이 인식되었거나, 화면 속 얼굴 개수가 달라졌을 때 (예: 1명 -> 2명)
+            if not self.current_bboxes or len(self.current_bboxes) != len(new_bboxes):
+                self.current_bboxes = new_bboxes
+                return
+
+            alpha = 0.7 # 텐션 조절 (낮을수록 부드러움)
+            smoothed = []
+            for old_box, new_box in zip(self.current_bboxes, new_bboxes):
+                ox, oy, ow, oh = old_box
+                nx, ny, nw, nh = new_box
+                
+                # 이전 좌표와 현재 좌표를 부드럽게 믹스
+                sx = int(ox * (1 - alpha) + nx * alpha)
+                sy = int(oy * (1 - alpha) + ny * alpha)
+                sw = int(ow * (1 - alpha) + nw * alpha)
+                sh = int(oh * (1 - alpha) + nh * alpha)
+                smoothed.append((sx, sy, sw, sh))
+                
+            self.current_bboxes = smoothed
+
+    def _trigger_intrusion_timer(self):
+            """[추가] 3초 유예 타이머 통합 관리"""
+            if self.intrusion_start_time is None:
+                self.intrusion_start_time = time.time()
+                print("[AI] ⚠️ 수상한 움직임 감지! 1.5초 카운트다운 시작...")
+            elif time.time() - self.intrusion_start_time > 1.5:
+                self.status = "INTRUSION"
+                print("[AI] 🚨 1.5초 초과! 머글 침입 감지 격발!")

@@ -167,6 +167,13 @@ class AppWindow:
                 print("[시스템] 🧙‍♂️ 주인 얼굴 등록 완료! 본격 감시 시작!")
             else:
                 pass
+
+        # bbox 그리기
+        bboxes = self.detector.get_bboxes()
+        for box in bboxes:
+            x, y, w, h = box
+            cv2.rectangle(frame_rgb, (x, y), (x + w, y + h), (0, 255, 0), 2)
+            cv2.putText(frame_rgb, "Face", (x, y - 10), cv2.FONT_HERSHEY_SIMPLEX, 0.7, (0, 255, 0), 2)
             
         # AI 디텍터 상태 피드백 확인
         if self.detector is not None and self.user_registered:
